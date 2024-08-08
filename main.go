@@ -29,7 +29,7 @@ func client(proto, host string, port int, message string) error {
 	return nil
 }
 
-// tcpServer implements the logic for the server. It uses helper functions tcpServer and udpServer to implement servers
+// server implements the logic for the server. It uses helper functions tcpServer and udpServer to implement servers
 // for the respective protocols.
 func server(proto, host string, port int) error {
 	hostPort := fmt.Sprintf("%s:%d", host, port)
