@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -31,10 +32,10 @@ func client(proto, host string, port int, message string) error {
 
 // server implements the logic for the server. It uses helper functions tcpServer and udpServer to implement servers
 // for the respective protocols.
-func server(proto, host string, port int) error {
+func server(proto, host string, port, udpConcurrency int) error {
 	hostPort := fmt.Sprintf("%s:%d", host, port)
 	if proto == UDP {
-		return udpServer(proto, hostPort)
+		return udpServer(proto, hostPort, udpConcurrency)
 	}
 	if proto == TCP {
 		return tcpServer(proto, hostPort)
@@ -44,7 +45,7 @@ func server(proto, host string, port int) error {
 
 // udpServer implements the logic for a UDP server. It listens on a given UDP socket. It reads from the socket and
 // prints the message of the client if flag -debug was provided.
-func udpServer(proto, hostPort string) error {
+func udpServer(proto, hostPort string, concurrency int) error {
 	addr, err := net.ResolveUDPAddr(proto, hostPort)
 	if err != nil {
 		return err
@@ -54,17 +55,28 @@ func udpServer(proto, hostPort string) error {
 		return err
 	}
 	defer conn.Close()
-	buffer := make([]byte, 1024)
-	for {
-		n, remote, err := conn.ReadFromUDP(buffer)
-		if err != nil {
-			log.Printf("could not read from UDP buffer, err: %q", err)
-			continue
-		}
-		if *debugFlag {
-			log.Printf("read from remote %s: %s", remote, string(buffer[:n]))
-		}
+
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		i := i
+		wg.Add(1)
+		go func(socket *net.UDPConn) {
+			defer wg.Done()
+			buffer := make([]byte, 1024)
+			for {
+				n, remote, err := socket.ReadFromUDP(buffer)
+				if err != nil {
+					log.Printf("could not read from UDP buffer in UDP server %d, err: %q", i, err)
+					continue
+				}
+				if *debugFlag {
+					log.Printf("read from remote %s in UDP server %d: %s", remote, i, string(buffer[:n]))
+				}
+			}
+		}(conn)
 	}
+	wg.Wait()
+	return nil
 }
 
 // tcpServer implements the logic for a TCP server. It listens on a given TCP socket. It accepts connections and then
@@ -99,12 +111,13 @@ func handleConnection(conn net.Conn) {
 }
 
 var (
-	serverFlag   = flag.Bool("server", false, "server")
-	protocolFlag = flag.String("protocol", "tcp", "protocol")
-	hostFlag     = flag.String("host", "127.0.0.1", "host")
-	portFlag     = flag.Int("port", 8080, "port")
-	rateFlag     = flag.Int("rate-per-second", 1000, "rate of connections per second")
-	debugFlag    = flag.Bool("debug", false, "debug")
+	serverFlag         = flag.Bool("server", false, "server")
+	protocolFlag       = flag.String("protocol", "tcp", "protocol")
+	hostFlag           = flag.String("host", "127.0.0.1", "host")
+	portFlag           = flag.Int("port", 8080, "port")
+	rateFlag           = flag.Int("rate-per-second", 1000, "rate of connections per second")
+	udpConcurrencyFlag = flag.Int("udp-server-concurrency", 2, "number of concurrent UDP servers")
+	debugFlag          = flag.Bool("debug", false, "debug")
 )
 
 func main() {
@@ -123,7 +136,7 @@ func main() {
 
 	// Code for the server. See server() for more details.
 	if *serverFlag {
-		if err := server(protocol, *hostFlag, *portFlag); err != nil {
+		if err := server(protocol, *hostFlag, *portFlag, *udpConcurrencyFlag); err != nil {
 			log.Fatalf("could not create server, err: %q", err)
 		}
 		return
